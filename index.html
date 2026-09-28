@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Glyph</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="wrap">
+        <header class="top">
+            <h1>Glyph<span>.</span></h1>
+            <p class="sub">find the rule</p>
+        </header>
+
+        <nav class="tabs" role="tablist" aria-label="Game Modes">
+            <button class="tab active" id="tab-endless" role="tab" aria-selected="true">Endless</button>
+            <button class="tab" id="tab-daily" role="tab" aria-selected="false">Daily</button>
+        </nav>
+
+        <div class="statline">
+            <div class="pills" id="pills" aria-label="Level progress indicators"></div>
+            <div class="level-badge" id="tier-tag">tier 1</div>
+        </div>
+
+        <div class="progress-wrap" id="progress-wrap">
+            <div class="progress-label" id="progress-label" aria-live="polite"></div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+            </div>
+        </div>
+
+        <main id="game-area" aria-live="polite"></main>
+
+        <footer>no login · no server · all the progress lives in this browser</footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
