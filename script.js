@@ -1,491 +1,574 @@
-(function () {
-  var SHAPE_POOL = ['●', '■', '▲', '◆', '★'];
-  var COLOR_POOL = ['#E8604C', '#3F9163', '#3B82C4', '#B8860B', '#8B5FBF'];
-  var COUNT_POOL = [1, 2, 3];
-  var HINT_ORDER = ['color', 'shape', 'count'];
-  var TIERS = [
-    { max: 3,  varying: ['color'], label: 'Tier 1', numChoices: 3 },
-    { max: 6,  varying: ['color', 'shape'], label: 'Tier 2', numChoices: 4 },
-    { max: 10, varying: ['color', 'shape', 'count'], label: 'Tier 3', numChoices: 5 },
-    { max: Infinity, varying: ['color', 'shape', 'count'], label: 'Tier 4', numChoices: 6 }
+(() => {
+  const SHAPES = ['●', '■', '▲', '◆', '★'];
+  const COLORS = ['#E8604C', '#3F9163', '#3B82C4', '#B8860B', '#8B5FBF'];
+  const COUNTS = [1, 2, 3];
+  const HINT_ORDER = ['color', 'shape', 'count'];
+
+  const TIERS = [
+    { maxSolved: 3, changing: ['color'], label: 'Tier 1', choices: 3 },
+    { maxSolved: 6, changing: ['color', 'shape'], label: 'Tier 2', choices: 4 },
+    { maxSolved: 10, changing: ['color', 'shape', 'count'], label: 'Tier 3', choices: 5 },
+    { maxSolved: Infinity, changing: ['color', 'shape', 'count'], label: 'Tier 4', choices: 6 }
   ];
-  var DAILY_SEQUENCE = [0, 1, 2, 2, 3];
 
-  function tierIndexFor(n) {
-    for (var i = 0; i < TIERS.length; i++) if (n < TIERS[i].max) return i;
-    return TIERS.length - 1;
-  }
-  function tierMinFor(i) { return i === 0 ? 0 : TIERS[i - 1].max; }
+  const DAILY_TIERS = [0, 1, 2, 2, 3];
+  const DAY_ZERO = new Date(2024, 0, 1);
 
-  function hashStr(s) {
-    var h = 1779033703 ^ s.length;
-    for (var i = 0; i < s.length; i++) {
-        h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
-        h = (h << 13) | (h >>> 19);
-    }
-    return (h >>> 0);
-  }
-  function mulberry32(seed) {
-    return function () {
-        seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-        var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function todayKey() {
-    var now = new Date();
-    var today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-    var start = Date.UTC(2024, 0, 1);
-    return Math.round((today - start) / 86400000) + 1;
-  }
-  function dayNumber() { return todayKey(); }
-
-  function shuffle(rand, arr) {
-    var a = arr.slice();
-    for (var i = a.length - 1; i > 0; i--) {
-        var j = Math.floor(rand() * (i + 1));
-        var t = a[i]; a[i] = a[j]; a[j] = t;
-    }
-    return a;
-  }
-  function pickN(rand, pool, n) { return shuffle(rand, pool).slice(0, n); }
-
-  function buildAttr(rand, pool, isVarying) {
-    if (!isVarying) return { varying: false, value: pool[Math.floor(rand() * pool.length)] };
-    var values = pickN(rand, pool, 3);
-    var flip = rand() < 0.5;
-    return { varying: true, values: values, fn: function (r, c) { var idx = flip ? (r - c + 3) % 3 : (r + c) % 3; return values[idx]; } };
-  }
-  function attrAt(attr, r, c) { return attr.varying ? attr.fn(r, c) : attr.value; }
-  function cellData(attrs, r, c) {
-    return { shape: attrAt(attrs.shape, r, c), color: attrAt(attrs.color, r, c), count: attrAt(attrs.count, r, c) };
-  }
-  function sameCell(a, b) { return a.shape === b.shape && a.color === b.color && a.count === b.count; }
-
-  function renderCellInto(container, data, extraClass) {
-    container.className = (extraClass || 'cell') + ' c' + data.count;
-    container.innerHTML = '';
-    for (var i = 0; i < data.count; i++) {
-        var s = document.createElement('span');
-        s.className = 'g'; s.textContent = data.shape; s.style.color = data.color;
-        container.appendChild(s);
-    }
-  }
-
-  function confettiBurst() {
-    var colors = ['#E8604C', '#3F9163', '#C99A2E', '#3B82C4'];
-    for (var i = 0; i < 26; i++) {
-      var d = document.createElement('div');
-      d.className = 'confetti';
-      d.style.left = (Math.random() * 100) + 'vw';
-      d.style.background = colors[Math.floor(Math.random() * colors.length)];
-      d.style.setProperty('--dx', (Math.random() * 140 - 70) + 'px');
-      d.style.setProperty('--rot', (Math.random() * 720 - 360) + 'deg');
-      d.style.animationDuration = (1.4 + Math.random() * 1.2) + 's';
-      document.body.appendChild(d);
-      (function (el) { setTimeout(function () { el.remove(); }, 3000); })(d);
-    }
-  }
-
-  var bestStreak = parseInt(localStorage.getItem('glyph_best') || '0', 10);
-  var bestTimeMs = parseInt(localStorage.getItem('glyph_best_time') || '0', 10) || null;
-
-  var ui = {
-    tabEndless: document.getElementById('tab-endless'),
-    tabDaily: document.getElementById('tab-daily'),
+  const ui = {
+    endlessTab: document.getElementById('tab-endless'),
+    dailyTab: document.getElementById('tab-daily'),
     pills: document.getElementById('pills'),
     tier: document.getElementById('tier-tag'),
     progressWrap: document.getElementById('progress-wrap'),
     progressLabel: document.getElementById('progress-label'),
     progressFill: document.getElementById('progress-fill'),
-    area: document.getElementById('game-area')
+    gameArea: document.getElementById('game-area')
   };
 
-  var mode = 'endless';
-  var endless = { round: 1, streak: 0, lives: 3, solvedTotal: 0, over: false };
-  var daily = { roundIdx: 0, lives: 3, results: [], done: false, todayKey: todayKey() };
+  const sfx = {
+    ctx: null,
+    init() {
+      if (!this.ctx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AudioContext();
+      }
+    },
+    play(type) {
+      try {
+        this.init();
+        if (this.ctx.state === 'suspended') this.ctx.resume();
 
-  var savedDaily = null;
-  try { savedDaily = JSON.parse(localStorage.getItem('glyph_daily_' + daily.todayKey) || 'null'); } catch (e) {}
-  if (savedDaily) { daily.done = true; daily.results = savedDaily.results; daily.lives = savedDaily.lives; }
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
 
-  var rc = null;
+        if (type === 'click') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(400, now);
+          osc.frequency.exponentialRampToValueAtTime(150, now + 0.05);
+          gain.gain.setValueAtTime(0.15, now);
+          gain.gain.linearRampToValueAtTime(0.01, now + 0.05);
+          osc.start(now);
+          osc.stop(now + 0.05);
+        } else if (type === 'correct') {
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(523.25, now);
+          osc.frequency.setValueAtTime(659.25, now + 0.08);
+          osc.frequency.setValueAtTime(783.99, now + 0.16);
+          gain.gain.setValueAtTime(0.12, now);
+          gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+          osc.start(now);
+          osc.stop(now + 0.3);
+        } else if (type === 'wrong') {
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(160, now);
+          osc.frequency.linearRampToValueAtTime(80, now + 0.15);
+          gain.gain.setValueAtTime(0.15, now);
+          gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+          osc.start(now);
+          osc.stop(now + 0.15);
+        }
+      } catch (e) {}
+    }
+  };
 
-  function fmtTime(ms) { return (ms / 1000).toFixed(1) + 's'; }
+  const state = {
+    mode: 'endless',
+    round: null,
+    endless: { roundNumber: 1, streak: 0, lives: 3, solved: 0, gameOver: false },
+    daily: { roundIndex: 0, lives: 3, results: [], finished: false, day: getTodayKey() },
+    records: { streak: readNum('glyph_best'), fastest: readNum('glyph_best_time') || null }
+  };
 
-  function heartsHTML(lives) {
-    var h = '';
-    for (var i = 0; i < 3; i++) h += i < lives ? '♥' : '<span class="empty">♥</span>';
-    return h;
+  loadDaily();
+  bindUI();
+  switchMode('endless');
+
+  function readNum(k) {
+    const v = parseInt(localStorage.getItem(k) || '0', 10);
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function loadDaily() {
+    try {
+      const s = JSON.parse(localStorage.getItem('glyph_daily_' + state.daily.day));
+      if (!s) return;
+      state.daily.finished = true;
+      state.daily.results = Array.isArray(s.results) ? s.results : [];
+      state.daily.lives = Number.isFinite(s.lives) ? s.lives : 3;
+    } catch {
+      state.daily.finished = false;
+      state.daily.results = [];
+      state.daily.lives = 3;
+    }
+  }
+
+  function saveDaily() {
+    try {
+      localStorage.setItem('glyph_daily_' + state.daily.day, JSON.stringify({
+        results: state.daily.results,
+        lives: state.daily.lives
+      }));
+    } catch {}
+  }
+
+  function getTodayKey() {
+    const now = new Date();
+    return Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - DAY_ZERO) / 86400000) + 1;
+  }
+
+  function seededRandom(seed) {
+    let v = seed | 0;
+    return () => {
+      v = (v + 0x6D2B79F5) | 0;
+      let t = Math.imul(v ^ (v >>> 15), 1 | v);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function hash(str) {
+    let res = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) {
+      res = Math.imul(res ^ str.charCodeAt(i), 3432918353);
+      res = (res << 13) | (res >>> 19);
+    }
+    return res >>> 0;
+  }
+
+  function randomize(rand, list) {
+    const copy = list.slice();
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  }
+
+  function choose(rand, list) {
+    return list[Math.floor(rand() * list.length)];
+  }
+
+  function getTier(solved) {
+    return TIERS.findIndex(t => solved < t.maxSolved);
+  }
+
+  function fmtTime(ms) {
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
+  function renderHearts(lives) {
+    let res = '';
+    for (let i = 0; i < 3; i++) {
+      res += i < lives ? '♥' : '<span class="empty">♥</span>';
+    }
+    return res;
+  }
+
+  function makeAttr(rand, values, changing) {
+    if (!changing) return { changing: false, value: choose(rand, values) };
+    const opts = randomize(rand, values).slice(0, 3);
+    const rev = rand() < 0.5;
+    return {
+      changing: true,
+      values: opts,
+      getValue(r, c) {
+        return opts[rev ? (r - c + 3) % 3 : (r + c) % 3];
+      }
+    };
+  }
+
+  function readAttr(attr, r, c) {
+    return attr.changing ? attr.getValue(r, c) : attr.value;
+  }
+
+  function makeCell(attrs, r, c) {
+    return {
+      shape: readAttr(attrs.shape, r, c),
+      color: readAttr(attrs.color, r, c),
+      count: readAttr(attrs.count, r, c)
+    };
+  }
+
+  function matchCells(a, b) {
+    return a.shape === b.shape && a.color === b.color && a.count === b.count;
+  }
+
+  function buildRound(rand, tier) {
+    const attributes = {
+      shape: makeAttr(rand, SHAPES, tier.changing.includes('shape')),
+      color: makeAttr(rand, COLORS, tier.changing.includes('color')),
+      count: makeAttr(rand, COUNTS, tier.changing.includes('count'))
+    };
+
+    const answer = makeCell(attributes, 2, 2);
+    const keyFn = cell => tier.changing.map(a => cell[a]).join('|');
+    const used = new Set([keyFn(answer)]);
+    const decoys = [];
+    let attempts = 300;
+
+    while (decoys.length < tier.choices - 1 && attempts > 0) {
+      attempts--;
+      const cand = { ...answer };
+      tier.changing.forEach(a => cand[a] = choose(rand, attributes[a].values));
+      const k = keyFn(cand);
+      if (!used.has(k)) {
+        used.add(k);
+        decoys.push(cand);
+      }
+    }
+
+    return {
+      random: rand,
+      attributes,
+      answer,
+      changing: tier.changing,
+      decoys,
+      revealed: {},
+      firstAttempt: true,
+      hintUsed: false,
+      locked: false,
+      startedAt: performance.now(),
+      timerId: null
+    };
+  }
+
+  function renderCell(el, cell, className = 'cell') {
+    el.className = `${className} c${cell.count}`;
+    el.replaceChildren();
+    for (let i = 0; i < cell.count; i++) {
+      const g = document.createElement('span');
+      g.className = 'g';
+      g.textContent = cell.shape;
+      g.style.color = cell.color;
+      el.appendChild(g);
+    }
+  }
+
+  function renderMarkup() {
+    ui.gameArea.innerHTML = `
+      <div class="card">
+        <div class="card-top">
+          <p class="prompt">Every row and column follows the same hidden rule. What belongs where the <b>?</b> is?</p>
+          <div class="timer" id="timer">0.0s</div>
+        </div>
+        <div class="grid" id="grid"></div>
+        <div class="hint-row">
+          <button class="hint-btn" id="hint-btn" type="button">💡 Hint</button>
+          <span class="hint-note" id="hint-note"></span>
+        </div>
+        <div class="revealed" id="revealed"></div>
+      </div>
+      <div class="choices-label">pick one</div>
+      <div class="choices" id="choices"></div>
+      <div class="feedback" id="feedback"></div>
+      <button class="next-btn" id="next-btn" type="button"></button>
+    `;
+
+    const grid = document.getElementById('grid');
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        const cell = document.createElement('div');
+        if (r === 2 && c === 2) {
+          cell.className = 'cell missing';
+          cell.textContent = '?';
+        } else {
+          renderCell(cell, makeCell(state.round.attributes, r, c));
+        }
+        grid.appendChild(cell);
+      }
+    }
+
+    const choicesEl = document.getElementById('choices');
+    randomize(state.round.random, [state.round.answer, ...state.round.decoys]).forEach(opt => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      renderCell(btn, opt, 'choice');
+      btn.addEventListener('click', () => {
+        sfx.play('click');
+        handleAnswer(btn, opt);
+      });
+      choicesEl.appendChild(btn);
+    });
+
+    state.round.timerId = setInterval(() => {
+      document.getElementById('timer').textContent = fmtTime(performance.now() - state.round.startedAt);
+    }, 100);
+
+    setupHint();
+  }
+
+  function setupHint() {
+    const btn = document.getElementById('hint-btn');
+    const note = document.getElementById('hint-note');
+    const maxHints = Math.max(0, state.round.changing.length - 1);
+
+    updateHintUI();
+
+    btn.addEventListener('click', () => {
+      sfx.play('click');
+      if (Object.keys(state.round.revealed).length >= maxHints) return;
+      const nextAttr = HINT_ORDER.find(a => state.round.changing.includes(a) && !state.round.revealed[a]);
+      if (!nextAttr) return;
+
+      state.round.revealed[nextAttr] = state.round.answer[nextAttr];
+      state.round.hintUsed = true;
+
+      const wrap = document.getElementById('revealed');
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      if (nextAttr === 'color') {
+        chip.innerHTML = `color <span style="width:10px;height:10px;border-radius:50%;background:${state.round.answer.color};display:inline-block"></span>`;
+      } else if (nextAttr === 'shape') {
+        chip.innerHTML = `shape <span style="color:${state.round.answer.color}">${state.round.answer.shape}</span>`;
+      } else {
+        chip.textContent = `count ${state.round.answer.count}`;
+      }
+      wrap.appendChild(chip);
+      updateHintUI();
+
+      if (state.mode === 'endless') {
+        state.endless.streak = 0;
+        renderStats();
+      }
+    });
+
+    function updateHintUI() {
+      const used = Object.keys(state.round.revealed).length;
+      const rem = maxHints - used;
+      btn.disabled = rem <= 0;
+      note.textContent = maxHints === 0 ? 'no hints at this tier' : `${rem} left`;
+    }
+  }
+
+  function handleAnswer(btn, choice) {
+    if (state.round.locked) return;
+    if (matchCells(choice, state.round.answer)) {
+      sfx.play('correct');
+      state.round.locked = true;
+      clearInterval(state.round.timerId);
+      document.querySelectorAll('#choices .choice').forEach(b => b.disabled = true);
+      const hintBtn = document.getElementById('hint-btn');
+      if (hintBtn) hintBtn.disabled = true;
+
+      btn.classList.add('correct');
+      const elapsed = performance.now() - state.round.startedAt;
+      const clean = state.round.firstAttempt && !state.round.hintUsed;
+
+      if (state.mode === 'endless') {
+        const prevTier = getTier(state.endless.solved);
+        state.endless.solved++;
+        state.endless.roundNumber++;
+        state.endless.streak = clean ? state.endless.streak + 1 : 0;
+
+        if (state.endless.streak > state.records.streak) {
+          state.records.streak = state.endless.streak;
+          localStorage.setItem('glyph_best', String(state.records.streak));
+        }
+        if (clean && (!state.records.fastest || elapsed < state.records.fastest)) {
+          state.records.fastest = elapsed;
+          localStorage.setItem('glyph_best_time', String(Math.round(elapsed)));
+        }
+
+        showFeedback(clean ? `✓ Solved in ${fmtTime(elapsed)}` : '✓ Solved.', 'solved');
+        showNext('Next round →');
+        renderStats();
+        if (getTier(state.endless.solved) > prevTier || (state.endless.streak >= 2 && state.records.streak === state.endless.streak)) confetti();
+      } else {
+        state.daily.results.push(clean ? '🟩' : '🟨');
+        showFeedback(clean ? '✓ Solved clean.' : '✓ Solved.', 'solved');
+        showNext(state.daily.roundIndex === DAILY_TIERS.length - 1 ? 'See results' : 'Next round →');
+        renderStats();
+      }
+    } else {
+      sfx.play('wrong');
+      btn.classList.add('wrong');
+      btn.disabled = true;
+      state.round.firstAttempt = false;
+
+      if (state.mode === 'endless') {
+        state.endless.lives--;
+        renderStats();
+        if (state.endless.lives <= 0) {
+          state.round.locked = true;
+          clearInterval(state.round.timerId);
+          document.querySelectorAll('#choices .choice').forEach(b => b.disabled = true);
+          state.endless.gameOver = true;
+          showFeedback(`Game over. Solved ${state.endless.solved}.`, 'over');
+          showNext('Play again');
+        } else {
+          showFeedback('Check attributes against row and column.', 'hint');
+        }
+      } else {
+        state.daily.lives--;
+        renderStats();
+        if (state.daily.lives <= 0) {
+          state.round.locked = true;
+          clearInterval(state.round.timerId);
+          document.querySelectorAll('#choices .choice').forEach(b => b.disabled = true);
+          while (state.daily.results.length < DAILY_TIERS.length) state.daily.results.push('🟥');
+          showFeedback('Out of lives for today.', 'over');
+          showNext('See results');
+        } else {
+          showFeedback('Check attributes against row and column.', 'hint');
+        }
+      }
+    }
+  }
+
+  function showFeedback(msg, type) {
+    const f = document.getElementById('feedback');
+    f.textContent = msg;
+    f.className = `feedback ${type} show`;
+  }
+
+  function showNext(text) {
+    const btn = document.getElementById('next-btn');
+    btn.textContent = text;
+    btn.classList.add('show');
   }
 
   function renderStats() {
-    if (mode === 'endless') {
-      ui.pills.innerHTML =
-        '<div class="pill">round <b>' + endless.round + '</b></div>' +
-        '<div class="pill">streak <b>' + endless.streak + '</b></div>' +
-        '<div class="pill">best <b>' + bestStreak + '</b></div>' +
-        (bestTimeMs ? '<div class="pill">fastest <b>' + fmtTime(bestTimeMs) + '</b></div>' : '') +
-        '<div class="pill hearts">' + heartsHTML(endless.lives) + '</div>';
-      var ti = tierIndexFor(endless.solvedTotal);
-      ui.tier.textContent = TIERS[ti].label;
+    if (state.mode === 'endless') {
+      const solved = state.endless.solved;
+      const tIdx = getTier(solved);
+      const tier = TIERS[tIdx];
+      const fastest = state.records.fastest ? `<div class="pill">fastest <b>${fmtTime(state.records.fastest)}</b></div>` : '';
+
+      ui.pills.innerHTML = `
+        <div class="pill">round <b>${state.endless.roundNumber}</b></div>
+        <div class="pill">streak <b>${state.endless.streak}</b></div>
+        <div class="pill">best <b>${state.records.streak}</b></div>
+        ${fastest}
+        <div class="pill hearts">${renderHearts(state.endless.lives)}</div>
+      `;
+      ui.tier.textContent = tier.label;
       ui.tier.style.display = '';
-      if (ti < TIERS.length - 1) {
-        var min = tierMinFor(ti), max = TIERS[ti].max;
-        ui.progressWrap.style.display = '';
-        ui.progressLabel.textContent = (max - endless.solvedTotal) + ' to next tier';
-        ui.progressFill.style.width = Math.round(((endless.solvedTotal - min) / (max - min)) * 100) + '%';
+      ui.progressWrap.style.display = '';
+
+      if (tIdx < TIERS.length - 1) {
+        const start = tIdx === 0 ? 0 : TIERS[tIdx - 1].maxSolved;
+        ui.progressLabel.textContent = `${tier.maxSolved - solved} to next tier`;
+        ui.progressFill.style.width = `${Math.max(0, Math.min(100, Math.round(((solved - start) / (tier.maxSolved - start)) * 100)))}%`;
       } else {
-        ui.progressWrap.style.display = '';
         ui.progressLabel.textContent = 'max tier reached';
         ui.progressFill.style.width = '100%';
       }
     } else {
-      ui.pills.innerHTML =
-        '<div class="pill">day <b>' + dayNumber() + '</b></div>' +
-        '<div class="pill">round <b>' + Math.min(daily.roundIdx + 1, 5) + '/5</b></div>' +
-        '<div class="pill hearts">' + heartsHTML(daily.lives) + '</div>';
+      const rNum = Math.min(state.daily.roundIndex + 1, DAILY_TIERS.length);
+      ui.pills.innerHTML = `
+        <div class="pill">day <b>${state.daily.day}</b></div>
+        <div class="pill">round <b>${rNum}/5</b></div>
+        <div class="pill hearts">${renderHearts(state.daily.lives)}</div>
+      `;
       ui.tier.style.display = 'none';
       ui.progressWrap.style.display = 'none';
     }
   }
 
-  function axisConflict(attrs, attrName, value) {
-    var rowVals = [cellData(attrs, 2, 0)[attrName], cellData(attrs, 2, 1)[attrName]];
-    var colVals = [cellData(attrs, 0, 2)[attrName], cellData(attrs, 1, 2)[attrName]];
-    var inRow = rowVals.indexOf(value) !== -1, inCol = colVals.indexOf(value) !== -1;
-    if (inRow && inCol) return 'row and column';
-    if (inRow) return 'row';
-    if (inCol) return 'column';
-    return null;
-  }
+  function switchMode(mode) {
+    state.mode = mode;
+    const endless = mode === 'endless';
+    ui.endlessTab.classList.toggle('active', endless);
+    ui.dailyTab.classList.toggle('active', !endless);
+    ui.endlessTab.setAttribute('aria-selected', String(endless));
+    ui.dailyTab.setAttribute('aria-selected', String(!endless));
 
-  function buildRoundContext(rand, tierCfg) {
-    var attrs = {
-      shape: buildAttr(rand, SHAPE_POOL, tierCfg.varying.indexOf('shape') !== -1),
-      color: buildAttr(rand, COLOR_POOL, tierCfg.varying.indexOf('color') !== -1),
-      count: buildAttr(rand, COUNT_POOL, tierCfg.varying.indexOf('count') !== -1)
-    };
-    var target = cellData(attrs, 2, 2);
-    var varying = tierCfg.varying;
-    var seen = {};
-    var key = function (o) { return varying.map(function (a) { return o[a]; }).join('|'); };
-    seen[key(target)] = true;
+    if (state.round && state.round.timerId) clearInterval(state.round.timerId);
 
-    var poolByAttr = {};
-    varying.forEach(function(a) { poolByAttr[a] = attrs[a].values || [attrs[a].value]; });
-    var allCombos = [];
-    
-    function generateCombos(index, current) {
-      if (index === varying.length) {
-        allCombos.push(current);
-        return;
-      }
-      var attr = varying[index];
-      poolByAttr[attr].forEach(function(val) {
-        var next = Object.assign({}, current);
-        next[attr] = val;
-        generateCombos(index + 1, next);
-      });
-    }
-    generateCombos(0, { shape: target.shape, color: target.color, count: target.count });
-
-    var validDecoyPool = shuffle(rand, allCombos.filter(function(cand) { return !seen[key(cand)]; }));
-    var decoys = validDecoyPool.slice(0, tierCfg.numChoices - 1);
-
-    return { 
-      rand: rand, attrs: attrs, target: target, varying: varying, decoys: decoys, 
-      revealed: {}, firstTry: true, hintUsed: false, locked: false, 
-      startTime: performance.now(), timerId: null 
-    };
-  }
-
-  function stopTimer() { 
-    if (rc && rc.timerId) { 
-      clearInterval(rc.timerId); 
-      rc.timerId = null; 
-    } 
-  }
-
-  function renderRoundUI(onChoice) {
-    stopTimer();
-
-    var html =
-      '<div class="card">' +
-        '<div class="card-top"><p class="prompt">Every row and column follows the same hidden rule, per attribute. What belongs where the <b>?</b> is?</p>' +
-        '<div class="timer" id="timer">0.0s</div></div>' +
-        '<div class="grid" id="grid"></div>' +
-        '<div class="hint-row"><button class="hint-btn" id="hint-btn">💡 Hint</button><span class="hint-note" id="hint-note"></span></div>' +
-        '<div class="revealed" id="revealed"></div>' +
-      '</div>' +
-      '<div class="choices-label">pick one</div>' +
-      '<div class="choices" id="choices"></div>' +
-      '<div class="feedback" id="feedback"></div>' +
-      '<button class="next-btn" id="next-btn"></button>';
-    ui.area.innerHTML = html;
-
-    var grid = document.getElementById('grid');
-    for (var r = 0; r < 3; r++) {
-      for (var c = 0; c < 3; c++) {
-        var cellEl = document.createElement('div');
-        if (r === 2 && c === 2) { cellEl.className = 'cell missing'; cellEl.textContent = '?'; }
-        else { renderCellInto(cellEl, cellData(rc.attrs, r, c)); }
-        grid.appendChild(cellEl);
-      }
-    }
-
-    var choicesEl = document.getElementById('choices');
-    var all = shuffle(rc.rand, [rc.target].concat(rc.decoys));
-    all.forEach(function (opt) {
-      var btn = document.createElement('button');
-      renderCellInto(btn, opt, 'choice');
-      btn.addEventListener('click', function () { onChoice(btn, opt); });
-      choicesEl.appendChild(btn);
-    });
-
-    var timerEl = document.getElementById('timer');
-    rc.timerId = setInterval(function () {
-      timerEl.textContent = fmtTime(performance.now() - rc.startTime);
-    }, 100);
-
-    var hintBtn = document.getElementById('hint-btn');
-    var revealableCount = rc.varying.filter(function (a) { return HINT_ORDER.indexOf(a) !== -1; }).length;
-    var maxReveals = Math.max(0, revealableCount - 1);
-    var hintNote = document.getElementById('hint-note');
-    function refreshHintUI() {
-      var revealedCount = Object.keys(rc.revealed).length;
-      hintBtn.disabled = revealedCount >= maxReveals;
-      hintNote.textContent = maxReveals === 0 ? 'no hints at this tier' : (maxReveals - revealedCount) + ' left';
-    }
-    refreshHintUI();
-    hintBtn.addEventListener('click', function () {
-      var revealedCount = Object.keys(rc.revealed).length;
-      if (revealedCount >= maxReveals) return;
-      var next = HINT_ORDER.filter(function (a) { return rc.varying.indexOf(a) !== -1 && !rc.revealed[a]; })[0];
-      if (!next) return;
-      rc.revealed[next] = rc.target[next];
-      rc.hintUsed = true;
-      var chipWrap = document.getElementById('revealed');
-      var chip = document.createElement('div');
-      chip.className = 'chip';
-      if (next === 'color') chip.innerHTML = 'color <span style="width:10px;height:10px;border-radius:50%;background:' + rc.target.color + ';display:inline-block"></span>';
-      else if (next === 'shape') chip.innerHTML = 'shape <span style="color:' + rc.target.color + '">' + rc.target.shape + '</span>';
-      else chip.textContent = 'count ' + rc.target.count;
-      chipWrap.appendChild(chip);
-      onHintUsed();
-      refreshHintUI();
-    });
-  }
-
-  var onHintUsed = function () {};
-
-  function startEndlessRound() {
-    var ti = tierIndexFor(endless.solvedTotal);
-    rc = buildRoundContext(Math.random, TIERS[ti]);
-    onHintUsed = function () {
-      if (endless.streak !== 0) { endless.streak = 0; renderStats(); }
-    };
-    renderRoundUI(handleEndlessChoice);
-    document.getElementById('next-btn').textContent = 'Next round →';
-    renderStats();
-  }
-
-  function handleEndlessChoice(btn, opt) {
-    if (rc.locked) return;
-    var correct = sameCell(opt, rc.target);
-    var feedback = document.getElementById('feedback');
-    var nextBtn = document.getElementById('next-btn');
-
-    if (correct) {
-      rc.locked = true; stopTimer();
-      btn.classList.add('correct');
-      Array.prototype.forEach.call(document.getElementById('choices').children, function (c) { c.disabled = true; });
-      document.getElementById('hint-btn').disabled = true;
-
-      var elapsed = performance.now() - rc.startTime;
-      var cleanSolve = rc.firstTry && !rc.hintUsed;
-
-      endless.solvedTotal++;
-      var oldTierIdx = tierIndexFor(endless.solvedTotal - 1);
-      var newTierIdx = tierIndexFor(endless.solvedTotal);
-
-      if (cleanSolve) { endless.streak++; } else { endless.streak = 0; }
-      var newBestStreak = false;
-      if (endless.streak > bestStreak) { bestStreak = endless.streak; localStorage.setItem('glyph_best', String(bestStreak)); newBestStreak = true; }
-      var newBestTime = false;
-      if (cleanSolve && (!bestTimeMs || elapsed < bestTimeMs)) { bestTimeMs = elapsed; localStorage.setItem('glyph_best_time', String(Math.round(bestTimeMs))); newBestTime = true; }
-
-      endless.round++;
-      feedback.textContent = cleanSolve ? '✓ Solved in ' + fmtTime(elapsed) + (newBestTime ? ' — new best time!' : '') : '✓ Solved.';
-      feedback.className = 'feedback solved show';
-      nextBtn.textContent = 'Next round →';
-      nextBtn.classList.add('show');
-      renderStats();
-
-      if (newTierIdx > oldTierIdx || (newBestStreak && endless.streak >= 2)) confettiBurst();
-    } else {
-      btn.classList.add('wrong'); btn.disabled = true;
-      endless.streak = 0; 
-      rc.firstTry = false;
-      endless.lives--;
-      renderStats();
-
-      if (endless.lives <= 0) {
-        rc.locked = true; stopTimer();
-        Array.prototype.forEach.call(document.getElementById('choices').children, function (c) { c.disabled = true; });
-        document.getElementById('hint-btn').disabled = true;
-        feedback.textContent = 'Game over — out of lives. Solved ' + endless.solvedTotal + ' this run (best streak ' + bestStreak + ').';
-        feedback.className = 'feedback over show';
-        nextBtn.textContent = 'Play again';
-        nextBtn.classList.add('show');
-        endless.over = true;
-      } else {
-        var msgs = [];
-        rc.varying.forEach(function (a) {
-          if (opt[a] !== rc.target[a]) { var axis = axisConflict(rc.attrs, a, opt[a]); if (axis) msgs.push(a + ' repeats in that ' + axis + '.'); }
-        });
-        feedback.textContent = msgs.length ? msgs.join(' ') : 'close — recheck every attribute against both the row and the column.';
-        feedback.className = 'feedback hint show';
-      }
-    }
-  }
-
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.id === 'next-btn') {
-      if (mode === 'endless') {
-        if (endless.over) { endless.over = false; endless.round = 1; endless.streak = 0; endless.lives = 3; endless.solvedTotal = 0; }
-        startEndlessRound();
-      } else {
-        advanceDaily();
-      }
-    }
-  });
-
-  function dailyRandFor(roundIdx) {
-    var seed = hashStr(daily.todayKey + ':' + roundIdx);
-    return mulberry32(seed);
-  }
-
-  function startDailyRound() {
-    if (daily.done) { renderDailySummary(); return; }
-    if (daily.lives <= 0 || daily.roundIdx >= 5) { finishDaily(); return; }
-    var tierCfg = TIERS[DAILY_SEQUENCE[daily.roundIdx]];
-    rc = buildRoundContext(dailyRandFor(daily.roundIdx), tierCfg);
-    onHintUsed = function () {};
-    renderRoundUI(handleDailyChoice);
-    document.getElementById('next-btn').textContent = daily.roundIdx === 4 ? 'See results' : 'Next round →';
-    renderStats();
-  }
-
-  function handleDailyChoice(btn, opt) {
-    if (rc.locked) return;
-    var correct = sameCell(opt, rc.target);
-    var feedback = document.getElementById('feedback');
-    var nextBtn = document.getElementById('next-btn');
-
-    if (correct) {
-      rc.locked = true; stopTimer();
-      btn.classList.add('correct');
-      Array.prototype.forEach.call(document.getElementById('choices').children, function (c) { c.disabled = true; });
-      document.getElementById('hint-btn').disabled = true;
-      var cleanSolve = rc.firstTry && !rc.hintUsed;
-      daily.results.push(cleanSolve ? '🟩' : '🟨');
-      feedback.textContent = cleanSolve ? '✓ Solved clean.' : '✓ Solved.';
-      feedback.className = 'feedback solved show';
-      nextBtn.classList.add('show');
+    if (endless) {
+      state.round = buildRound(Math.random, TIERS[getTier(state.endless.solved)]);
+      renderMarkup();
+      showNext('Next round →');
       renderStats();
     } else {
-      btn.classList.add('wrong'); btn.disabled = true;
-      rc.firstTry = false;
-      daily.lives--;
-      renderStats();
-      if (daily.lives <= 0) {
-        rc.locked = true; stopTimer();
-        Array.prototype.forEach.call(document.getElementById('choices').children, function (c) { c.disabled = true; });
-        document.getElementById('hint-btn').disabled = true;
-        
-        daily.results.push('🟥');
-        while (daily.results.length < 5) daily.results.push('🟥');
-        
-        feedback.textContent = 'Out of lives for today.';
-        feedback.className = 'feedback over show';
-        nextBtn.textContent = 'See results';
-        nextBtn.classList.add('show');
+      if (state.daily.finished) {
+        renderDailySummary();
+      } else if (state.daily.lives <= 0 || state.daily.roundIndex >= DAILY_TIERS.length) {
+        state.daily.finished = true;
+        saveDaily();
+        renderDailySummary();
       } else {
-        var msgs = [];
-        rc.varying.forEach(function (a) {
-          if (opt[a] !== rc.target[a]) { var axis = axisConflict(rc.attrs, a, opt[a]); if (axis) msgs.push(a + ' repeats in that ' + axis + '.'); }
-        });
-        feedback.textContent = msgs.length ? msgs.join(' ') : 'close — recheck every attribute against both the row and the column.';
-        feedback.className = 'feedback hint show';
+        state.round = buildRound(seededRandom(hash(`${state.daily.day}:${state.daily.roundIndex}`)), TIERS[DAILY_TIERS[state.daily.roundIndex]]);
+        renderMarkup();
+        if (state.daily.roundIndex === DAILY_TIERS.length - 1) showNext('See results');
+        renderStats();
       }
     }
-  }
-
-  function advanceDaily() {
-    if (daily.lives <= 0) {
-      finishDaily();
-    } else {
-      daily.roundIdx++;
-      if (daily.roundIdx >= 5) finishDaily();
-      else startDailyRound();
-    }
-  }
-
-  function finishDaily() {
-    daily.done = true;
-    localStorage.setItem('glyph_daily_' + daily.todayKey, JSON.stringify({ results: daily.results, lives: daily.lives }));
-    renderDailySummary();
-    if (daily.lives > 0 && daily.results.indexOf('🟥') === -1) confettiBurst();
   }
 
   function renderDailySummary() {
-    stopTimer();
-    ui.area.innerHTML =
-      '<div class="card daily-summary">' +
-        '<div class="sub">Day ' + dayNumber() + ' complete</div>' +
-        '<div class="emoji-row">' + daily.results.join('') + '</div>' +
-        '<div class="prompt">' + daily.lives + ' / 3 lives left. Come back tomorrow for a new one.</div>' +
-        '<button class="copy-btn" id="copy-btn">Copy result</button>' +
-      '</div>';
-    document.getElementById('copy-btn').addEventListener('click', function () {
-      var text = 'Glyph — Day ' + dayNumber() + '\n' + daily.results.join('') + '\n' + daily.lives + '/3 lives';
-      var btn = this;
-      
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function () {
-          btn.textContent = 'Copied!'; btn.classList.add('copied');
-          setTimeout(function () { btn.textContent = 'Copy result'; btn.classList.remove('copied'); }, 1800);
-        }).catch(function () {});
-      } else {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        try {
-          document.execCommand('copy');
-          btn.textContent = 'Copied!'; btn.classList.add('copied');
-          setTimeout(function () { btn.textContent = 'Copy result'; btn.classList.remove('copied'); }, 1800);
-        } catch (err) {}
-        document.body.removeChild(ta);
+    ui.gameArea.innerHTML = `
+      <div class="card daily-summary">
+        <div class="sub">Day ${state.daily.day} complete</div>
+        <div class="emoji-row">${state.daily.results.join('')}</div>
+        <div class="prompt">${state.daily.lives} / 3 lives left. Come back tomorrow.</div>
+        <button class="copy-btn" id="copy-btn" type="button">Copy result</button>
+      </div>
+    `;
+    document.getElementById('copy-btn').addEventListener('click', async () => {
+      sfx.play('click');
+      const btn = document.getElementById('copy-btn');
+      try {
+        await navigator.clipboard.writeText(`Glyph — Day ${state.daily.day}\n${state.daily.results.join('')}\n${state.daily.lives}/3 lives`);
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy result', 1800);
+      } catch {
+        btn.textContent = 'Could not copy';
+        setTimeout(() => btn.textContent = 'Copy result', 1800);
       }
     });
     renderStats();
   }
 
-  function switchMode(m) {
-    stopTimer();
-    mode = m;
-    ui.tabEndless.classList.toggle('active', m === 'endless');
-    ui.tabDaily.classList.toggle('active', m === 'daily');
-    if (m === 'endless') startEndlessRound();
-    else startDailyRound();
+  function bindUI() {
+    ui.endlessTab.addEventListener('click', () => {
+      sfx.play('click');
+      switchMode('endless');
+    });
+    ui.dailyTab.addEventListener('click', () => {
+      sfx.play('click');
+      switchMode('daily');
+    });
+
+    document.addEventListener('click', e => {
+      if (e.target.id !== 'next-btn') return;
+      sfx.play('click');
+      if (state.mode === 'endless') {
+        if (state.endless.gameOver) {
+          state.endless = { roundNumber: 1, streak: 0, lives: 3, solved: 0, gameOver: false };
+        }
+        state.round = buildRound(Math.random, TIERS[getTier(state.endless.solved)]);
+        renderMarkup();
+        showNext('Next round →');
+        renderStats();
+      } else {
+        state.daily.roundIndex++;
+        if (state.daily.roundIndex >= DAILY_TIERS.length || state.daily.lives <= 0) {
+          state.daily.finished = true;
+          saveDaily();
+          renderDailySummary();
+        } else {
+          switchMode('daily');
+        }
+      }
+    });
   }
 
-  ui.tabEndless.addEventListener('click', function () { switchMode('endless'); });
-  ui.tabDaily.addEventListener('click', function () { switchMode('daily'); });
-
-  switchMode('endless');
+  function confetti() {
+    const colors = ['#E8604C', '#3F9163', '#C99A2E', '#3B82C4'];
+    for (let i = 0; i < 26; i++) {
+      const p = document.createElement('div');
+      p.className = 'confetti';
+      p.style.left = `${Math.random() * 100}vw`;
+      p.style.background = choose(Math.random, colors);
+      p.style.setProperty('--dx', `${Math.random() * 140 - 70}px`);
+      p.style.setProperty('--rot', `${Math.random() * 720 - 360}deg`);
+      p.style.animationDuration = `${1.4 + Math.random() * 1.2}s`;
+      document.body.appendChild(p);
+      setTimeout(() => p.remove(), 3000);
+    }
+  }
 })();
