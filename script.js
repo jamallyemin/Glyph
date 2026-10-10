@@ -11,8 +11,9 @@
     { maxSolved: Infinity, changing: ['color', 'shape', 'count'], label: 'Tier 4', choices: 6 }
   ];
 
+  // which tier each daily round uses, gets harder as you go
   const DAILY_TIERS = [0, 1, 2, 2, 3];
-  const DAY_ZERO = new Date(2024, 0, 1);
+  const DAY_ZERO = new Date(2024, 0, 1); // day 1 = jan 1 2024, just so the number looks nice
 
   const ui = {
     endlessTab: document.getElementById('tab-endless'),
@@ -70,7 +71,7 @@
           osc.start(now);
           osc.stop(now + 0.15);
         }
-      } catch (e) {}
+      } catch (e) {} // audio can fail on some browsers, not worth breaking the game over
     }
   };
 
@@ -119,7 +120,8 @@
     return Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - DAY_ZERO) / 86400000) + 1;
   }
 
-  function seededRandom(seed) {
+  // mulberry32, so the daily puzzle is the same for evryone
+  function seededRng(seed) {
     let v = seed | 0;
     return () => {
       v = (v + 0x6D2B79F5) | 0;
@@ -138,7 +140,7 @@
     return res >>> 0;
   }
 
-  function randomize(rand, list) {
+  function shuffle(rand, list) {
     const copy = list.slice();
     for (let i = copy.length - 1; i > 0; i--) {
       const j = Math.floor(rand() * (i + 1));
@@ -147,7 +149,7 @@
     return copy;
   }
 
-  function choose(rand, list) {
+  function pick(rand, list) {
     return list[Math.floor(rand() * list.length)];
   }
 
@@ -155,11 +157,11 @@
     return TIERS.findIndex(t => solved < t.maxSolved);
   }
 
-  function fmtTime(ms) {
+  function formatTime(ms) {
     return (ms / 1000).toFixed(1) + 's';
   }
 
-  function renderHearts(lives) {
+  function heartsHTML(lives) {
     let res = '';
     for (let i = 0; i < 3; i++) {
       res += i < lives ? '♥' : '<span class="empty">♥</span>';
@@ -167,9 +169,10 @@
     return res;
   }
 
-  function makeAttr(rand, values, changing) {
-    if (!changing) return { changing: false, value: choose(rand, values) };
-    const opts = randomize(rand, values).slice(0, 3);
+  // an attribute either stays fixed or cycles through 3 values across the grid
+  function buildAttr(rand, values, changing) {
+    if (!changing) return { changing: false, value: pick(rand, values) };
+    const opts = shuffle(rand, values).slice(0, 3);
     const rev = rand() < 0.5;
     return {
       changing: true,
@@ -180,39 +183,40 @@
     };
   }
 
-  function readAttr(attr, r, c) {
+  function getAttr(attr, r, c) {
     return attr.changing ? attr.getValue(r, c) : attr.value;
   }
 
-  function makeCell(attrs, r, c) {
+  function buildCell(attrs, r, c) {
     return {
-      shape: readAttr(attrs.shape, r, c),
-      color: readAttr(attrs.color, r, c),
-      count: readAttr(attrs.count, r, c)
+      shape: getAttr(attrs.shape, r, c),
+      color: getAttr(attrs.color, r, c),
+      count: getAttr(attrs.count, r, c)
     };
   }
 
-  function matchCells(a, b) {
+  function sameCell(a, b) {
     return a.shape === b.shape && a.color === b.color && a.count === b.count;
   }
 
   function buildRound(rand, tier) {
     const attributes = {
-      shape: makeAttr(rand, SHAPES, tier.changing.includes('shape')),
-      color: makeAttr(rand, COLORS, tier.changing.includes('color')),
-      count: makeAttr(rand, COUNTS, tier.changing.includes('count'))
+      shape: buildAttr(rand, SHAPES, tier.changing.includes('shape')),
+      color: buildAttr(rand, COLORS, tier.changing.includes('color')),
+      count: buildAttr(rand, COUNTS, tier.changing.includes('count'))
     };
 
-    const answer = makeCell(attributes, 2, 2);
+    // bottom right cell is always the missing one
+    const answer = buildCell(attributes, 2, 2);
     const keyFn = cell => tier.changing.map(a => cell[a]).join('|');
     const used = new Set([keyFn(answer)]);
     const decoys = [];
-    let attempts = 300;
+    let attempts = 300; // bail out eventually so we dont loop forever on small tiers
 
     while (decoys.length < tier.choices - 1 && attempts > 0) {
       attempts--;
       const cand = { ...answer };
-      tier.changing.forEach(a => cand[a] = choose(rand, attributes[a].values));
+      tier.changing.forEach(a => cand[a] = pick(rand, attributes[a].values));
       const k = keyFn(cand);
       if (!used.has(k)) {
         used.add(k);
@@ -275,14 +279,14 @@
           cell.className = 'cell missing';
           cell.textContent = '?';
         } else {
-          renderCell(cell, makeCell(state.round.attributes, r, c));
+          renderCell(cell, buildCell(state.round.attributes, r, c));
         }
         grid.appendChild(cell);
       }
     }
 
     const choicesEl = document.getElementById('choices');
-    randomize(state.round.random, [state.round.answer, ...state.round.decoys]).forEach(opt => {
+    shuffle(state.round.random, [state.round.answer, ...state.round.decoys]).forEach(opt => {
       const btn = document.createElement('button');
       btn.type = 'button';
       renderCell(btn, opt, 'choice');
@@ -294,7 +298,7 @@
     });
 
     state.round.timerId = setInterval(() => {
-      document.getElementById('timer').textContent = fmtTime(performance.now() - state.round.startedAt);
+      document.getElementById('timer').textContent = formatTime(performance.now() - state.round.startedAt);
     }, 100);
 
     setupHint();
@@ -316,6 +320,7 @@
       state.round.revealed[nextAttr] = state.round.answer[nextAttr];
       state.round.hintUsed = true;
 
+      // TODO: maybe show hints in the grid instead of chips
       const wrap = document.getElementById('revealed');
       const chip = document.createElement('div');
       chip.className = 'chip';
@@ -329,6 +334,7 @@
       wrap.appendChild(chip);
       updateHintUI();
 
+      // using a hint kills the streak
       if (state.mode === 'endless') {
         state.endless.streak = 0;
         renderStats();
@@ -345,7 +351,7 @@
 
   function handleAnswer(btn, choice) {
     if (state.round.locked) return;
-    if (matchCells(choice, state.round.answer)) {
+    if (sameCell(choice, state.round.answer)) {
       sfx.play('correct');
       state.round.locked = true;
       clearInterval(state.round.timerId);
@@ -355,6 +361,7 @@
 
       btn.classList.add('correct');
       const elapsed = performance.now() - state.round.startedAt;
+      // "clean" = no wrong guesses and no hints
       const clean = state.round.firstAttempt && !state.round.hintUsed;
 
       if (state.mode === 'endless') {
@@ -372,7 +379,7 @@
           localStorage.setItem('glyph_best_time', String(Math.round(elapsed)));
         }
 
-        showFeedback(clean ? `✓ Solved in ${fmtTime(elapsed)}` : '✓ Solved.', 'solved');
+        showFeedback(clean ? `✓ Solved in ${formatTime(elapsed)}` : '✓ Solved.', 'solved');
         showNext('Next round →');
         renderStats();
         if (getTier(state.endless.solved) > prevTier || (state.endless.streak >= 2 && state.records.streak === state.endless.streak)) confetti();
@@ -435,14 +442,14 @@
       const solved = state.endless.solved;
       const tIdx = getTier(solved);
       const tier = TIERS[tIdx];
-      const fastest = state.records.fastest ? `<div class="pill">fastest <b>${fmtTime(state.records.fastest)}</b></div>` : '';
+      const fastest = state.records.fastest ? `<div class="pill">fastest <b>${formatTime(state.records.fastest)}</b></div>` : '';
 
       ui.pills.innerHTML = `
         <div class="pill">round <b>${state.endless.roundNumber}</b></div>
         <div class="pill">streak <b>${state.endless.streak}</b></div>
         <div class="pill">best <b>${state.records.streak}</b></div>
         ${fastest}
-        <div class="pill hearts">${renderHearts(state.endless.lives)}</div>
+        <div class="pill hearts">${heartsHTML(state.endless.lives)}</div>
       `;
       ui.tier.textContent = tier.label;
       ui.tier.style.display = '';
@@ -461,7 +468,7 @@
       ui.pills.innerHTML = `
         <div class="pill">day <b>${state.daily.day}</b></div>
         <div class="pill">round <b>${rNum}/5</b></div>
-        <div class="pill hearts">${renderHearts(state.daily.lives)}</div>
+        <div class="pill hearts">${heartsHTML(state.daily.lives)}</div>
       `;
       ui.tier.style.display = 'none';
       ui.progressWrap.style.display = 'none';
@@ -491,7 +498,7 @@
         saveDaily();
         renderDailySummary();
       } else {
-        state.round = buildRound(seededRandom(hash(`${state.daily.day}:${state.daily.roundIndex}`)), TIERS[DAILY_TIERS[state.daily.roundIndex]]);
+        state.round = buildRound(seededRng(hash(`${state.daily.day}:${state.daily.roundIndex}`)), TIERS[DAILY_TIERS[state.daily.roundIndex]]);
         renderMarkup();
         if (state.daily.roundIndex === DAILY_TIERS.length - 1) showNext('See results');
         renderStats();
@@ -533,6 +540,7 @@
       switchMode('daily');
     });
 
+    // next button gets recreated every round so i just listen on document
     document.addEventListener('click', e => {
       if (e.target.id !== 'next-btn') return;
       sfx.play('click');
@@ -557,13 +565,14 @@
     });
   }
 
+  // quick and dirty confeti, nothing fancy
   function confetti() {
     const colors = ['#E8604C', '#3F9163', '#C99A2E', '#3B82C4'];
     for (let i = 0; i < 26; i++) {
       const p = document.createElement('div');
       p.className = 'confetti';
       p.style.left = `${Math.random() * 100}vw`;
-      p.style.background = choose(Math.random, colors);
+      p.style.background = pick(Math.random, colors);
       p.style.setProperty('--dx', `${Math.random() * 140 - 70}px`);
       p.style.setProperty('--rot', `${Math.random() * 720 - 360}deg`);
       p.style.animationDuration = `${1.4 + Math.random() * 1.2}s`;
